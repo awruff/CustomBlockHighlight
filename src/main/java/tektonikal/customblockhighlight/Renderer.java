@@ -90,6 +90,8 @@ import tektonikal.customblockhighlight.config.BlockHighlightConfig;
 //? if >=1.21.4
 import tektonikal.customblockhighlight.mixin.VoxelShapeAccessor;
 import tektonikal.customblockhighlight.util.*;
+//? if >=1.21.5
+import tektonikal.customblockhighlight.compat.IrisCompat;
 
 import java.awt.*;
 import java.lang.Math;
@@ -98,7 +100,6 @@ import java.util.List;
 import java.util.stream.Stream;
 
 //? if >=1.21.5 {
-import static net.minecraft.client.renderer.RenderPipelines.DEBUG_QUADS;
 import static net.minecraft.client.renderer.RenderPipelines.LINES;
 //?}
 //? if >=1.21.2
@@ -138,19 +139,33 @@ public class Renderer {
 
 
 	//? if >=1.21.5 {
-	public static final RenderPipeline LINE_NO_DEPTH = evilPipeline(RenderPipelines.LINES_SNIPPET, "pipeline/evil-lines", true);
-	public static final RenderPipeline FILL_NO_DEPTH = evilPipeline(RenderPipelines.DEBUG_FILLED_SNIPPET, "pipeline/evil-fill", true);
-	public static final RenderPipeline LINES_CONCEALED_ONLY = evilPipeline(RenderPipelines.LINES_SNIPPET, "pipeline/eviler-lines", false);
-	public static final RenderPipeline FILL_CONCEALED_ONLY = evilPipeline(RenderPipelines.DEBUG_FILLED_SNIPPET, "pipeline/eviler-fill", false);
+	public static final VertexFormat FILL_FORMAT = DefaultVertexFormat.ENTITY;
 
-	private static RenderPipeline evilPipeline(RenderPipeline.Snippet snippet, String path, boolean alwaysPass) {
+	public static final RenderPipeline LINE_NO_DEPTH = evilPipeline(RenderPipelines.LINES_SNIPPET, "pipeline/evil-lines", DepthTestMode.ALWAYS_PASS, true);
+	public static final RenderPipeline FILL_NO_DEPTH = evilPipeline(RenderPipelines.DEBUG_FILLED_SNIPPET, "pipeline/evil-fill", DepthTestMode.ALWAYS_PASS, false);
+	public static final RenderPipeline LINES_CONCEALED_ONLY = evilPipeline(RenderPipelines.LINES_SNIPPET, "pipeline/eviler-lines", DepthTestMode.HIDDEN_ONLY, true);
+	public static final RenderPipeline FILL_CONCEALED_ONLY = evilPipeline(RenderPipelines.DEBUG_FILLED_SNIPPET, "pipeline/eviler-fill", DepthTestMode.HIDDEN_ONLY, false);
+	public static final RenderPipeline FILL_NORMAL = evilPipeline(RenderPipelines.DEBUG_FILLED_SNIPPET, "pipeline/normal-fill", DepthTestMode.NORMAL, false);
+
+	private static RenderPipeline evilPipeline(RenderPipeline.Snippet snippet, String path, DepthTestMode mode, boolean lines) {
 		RenderPipeline.Builder builder = RenderPipeline.builder(snippet)
 				.withLocation(Identifier.fromNamespaceAndPath("custom-block-highlight", path))
 				//? if 26.3{
 				.withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
 				//?}
 				.withCull(false);
-		return RenderPipelines.register(withDepth(builder, alwaysPass).build());
+		if (!lines) {
+			//? if >=26.2 {
+			builder.withVertexBinding(0, FILL_FORMAT);
+			//?} else
+			/*builder.withVertexFormat(FILL_FORMAT, VertexFormat.Mode.QUADS);*/
+		}
+		if (mode != DepthTestMode.NORMAL) {
+			withDepth(builder, mode == DepthTestMode.ALWAYS_PASS);
+		}
+		RenderPipeline pipeline = RenderPipelines.register(builder.build());
+		IrisCompat.assign(pipeline, lines);
+		return pipeline;
 	}
 
 	public static RenderPipeline getPipeline(DepthTestMode mode, boolean lines) {
@@ -158,7 +173,7 @@ public class Renderer {
 			case ALWAYS_PASS -> lines ? LINE_NO_DEPTH : FILL_NO_DEPTH;
 			case HIDDEN_ONLY -> lines ? LINES_CONCEALED_ONLY : FILL_CONCEALED_ONLY;
 			//~ if 26.3 'LINES' -> 'LINES_TRANSLUCENT'
-			case NORMAL -> lines ? LINES : DEBUG_QUADS;
+			case NORMAL -> lines ? LINES : FILL_NORMAL;
 		};
 	}
 	//?}
@@ -215,6 +230,9 @@ public class Renderer {
     );
     public static final RenderType fillConcealed = RenderType.create(
             "fill_concealed", RenderSetup.builder(FILL_CONCEALED_ONLY).sortOnUpload().createRenderSetup()
+    );
+    public static final RenderType fillNormal = RenderType.create(
+            "fill_normal", RenderSetup.builder(FILL_NORMAL).sortOnUpload().createRenderSetup()
     );
 	//?}
 
@@ -292,7 +310,11 @@ public class Renderer {
 		if (lines) {
 			currentDraw = stagedOutlineBuffer.appendDraw(DefaultVertexFormat.POSITION_COLOR_NORMAL_LINE_WIDTH, PrimitiveTopology.LINES);
 		} else {
-			currentDraw = stagedOutlineBuffer.appendDraw(DefaultVertexFormat.POSITION_COLOR, PrimitiveTopology.QUADS, RenderSystem.getProjectionType().vertexSorting());
+			// No VertexSorting: that is the only thing that pulls in StagedVertexBuffer.decodeSortingPoints, which
+			// sizes its output from Draw.vertexCount but re-derives the loop bound from the slice byte length. The
+			// two disagreed and it ran off the end of the array. Without it the fill takes the same sequential
+			// index buffer the line draws already use.
+			currentDraw = stagedOutlineBuffer.appendDraw(FILL_FORMAT, PrimitiveTopology.QUADS);
 		}
 		return stagedOutlineBuffer.getVertexBuilder(currentDraw);
 	}
@@ -339,7 +361,7 @@ public class Renderer {
     }
     //?} elif >=1.21.5 {
 	/*public static VertexConsumer startDrawing(boolean lines) {
-		currentDraw = new BufferBuilder(allocator, lines ? VertexFormat.Mode.LINES : VertexFormat.Mode.QUADS, lines ? lineFormat() : DefaultVertexFormat.POSITION_COLOR);
+		currentDraw = new BufferBuilder(allocator, lines ? VertexFormat.Mode.LINES : VertexFormat.Mode.QUADS, lines ? lineFormat() : FILL_FORMAT);
 		return currentDraw;
 	}
 
@@ -816,7 +838,9 @@ public class Renderer {
 				drawLineLayer(stack, lineConfig, isCrystalObstructed, layer, buffer);
 			}
 		}
-		finishDraw(true, getActiveInstance().primary.lineDepthTest);
+		if (prevMode != null) {
+			finishDraw(true, getActiveInstance().primary.lineDepthTest);
+		}
 		get().pop();
 	}
 

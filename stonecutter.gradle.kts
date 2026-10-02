@@ -60,6 +60,9 @@ stonecutter parameters {
             replace("@Nullable ", "/*nl*/")
             replace("net.minecraft.util.Util", "net.minecraft.Util")
         }
+        string(current.parsed < "26.1") {
+            replace("DefaultVertexFormat.ENTITY", "DefaultVertexFormat.NEW_ENTITY")
+        }
         string(current.parsed < "26.2") {
             replace("gameRenderer.lighting()", "gameRenderer.getLighting()")
             replace("mainCamera", "getMainCamera")

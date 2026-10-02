@@ -36,6 +36,10 @@ dependencies {
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("deps.fabric_api")}")
     modImplementation("dev.isxander:yet-another-config-lib:${property("deps.yacl")}-fabric")
     modImplementation("com.terraformersmc:modmenu:${property("deps.modmenu")}")
+
+    if (sc.current.parsed >= "1.21.5") {
+        modCompileOnly("maven.modrinth:iris:${property("deps.iris")}")
+    }
 }
 
 fletchingTable {

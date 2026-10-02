@@ -28,7 +28,7 @@ public class CBHFeatureRenderer extends RenderTypeFeatureRenderer<CBHFeatureRend
 		for (Submit submit : submits) {
             //fill
 			VertexConsumer blegh = switch (submit.fillInfo.mode()){
-                case NORMAL -> this.getVertexBuilder(RenderTypes.debugQuads());
+                case NORMAL -> this.getVertexBuilder(Renderer.fillNormal);
                 case ALWAYS_PASS -> this.getVertexBuilder(Renderer.fillNoDepth);
                 case HIDDEN_ONLY -> this.getVertexBuilder(Renderer.fillConcealed);
             };
